@@ -1,0 +1,153 @@
+import React, { useEffect, useState } from 'react'
+import { supabase } from '../lib/supabase'
+
+function fmtEur(v) {
+  const n = parseFloat(v)||0
+  return n.toLocaleString('fr-FR',{style:'currency',currency:'EUR',maximumFractionDigits:0})
+}
+
+export default function More() {
+  const [data, setData] = useState(null)
+  const [params, setParams] = useState({ taux_horaire:40, ca_vise_mensuel:2700, taux_urssaf:0.22 })
+  const [editParams, setEditParams] = useState(false)
+  const [tmpParams, setTmpParams] = useState({})
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => { loadAll() }, [])
+
+  async function loadAll() {
+    setLoading(true)
+    const { data: { user } } = await supabase.auth.getUser()
+    const uid = user.id
+    const [iR, fR, dR, pR] = await Promise.all([
+      supabase.from('investissements').select('*').eq('user_id', uid).order('date_prevue'),
+      supabase.from('factures').select('montant, paye').eq('user_id', uid),
+      supabase.from('depenses').select('montant').eq('user_id', uid),
+      supabase.from('parametres').select('*').eq('user_id', uid).single()
+    ])
+    setData({ invest: iR.data||[], factures: fR.data||[], depenses: dR.data||[] })
+    if (pR.data) { setParams(pR.data); setTmpParams(pR.data) }
+    setLoading(false)
+  }
+
+  async function saveParams(e) {
+    e.preventDefault()
+    const { data: { user } } = await supabase.auth.getUser()
+    await supabase.from('parametres').update({
+      taux_horaire: parseFloat(tmpParams.taux_horaire),
+      ca_vise_mensuel: parseFloat(tmpParams.ca_vise_mensuel),
+      taux_urssaf: parseFloat(tmpParams.taux_urssaf)
+    }).eq('user_id', user.id)
+    setParams(tmpParams)
+    setEditParams(false)
+  }
+
+  async function toggleInvest(item) {
+    await supabase.from('investissements').update({ realise: !item.realise }).eq('id', item.id)
+    setData(d => ({ ...d, invest: d.invest.map(x => x.id===item.id ? {...x,realise:!x.realise} : x) }))
+  }
+
+  if (loading) return <div style={{ color:'var(--text2)', textAlign:'center', padding:'3rem' }}>Chargement…</div>
+
+  const { invest, factures, depenses } = data
+  const caPaye = factures.filter(f=>f.paye).reduce((s,r)=>s+(parseFloat(r.montant)||0),0)
+  const depTotal = depenses.reduce((s,r)=>s+(parseFloat(r.montant)||0),0)
+  const cotis = caPaye * params.taux_urssaf
+  const revNet = caPaye - cotis
+
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+
+      {/* URSSAF */}
+      <div style={{ background:'var(--bg2)', border:'1px solid var(--border)', borderRadius:'var(--radius)', padding:'14px 16px' }} className="anim">
+        <div style={{ fontSize:13, fontWeight:500, color:'var(--text2)', marginBottom:12 }}>🏦 URSSAF & Cotisations</div>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+          {[
+            { label:'CA encaissé', v:fmtEur(caPaye), color:'var(--accent2)' },
+            { label:'Taux cotisations', v:(params.taux_urssaf*100).toFixed(0)+'%', color:'var(--orange)' },
+            { label:'Cotisations estimées', v:fmtEur(cotis), color:'var(--red)' },
+            { label:'Revenu net estimé', v:fmtEur(revNet), color: revNet>=0?'var(--accent2)':'var(--red)' },
+          ].map(k => (
+            <div key={k.label} style={{ background:'var(--bg3)', borderRadius:'var(--radius-sm)', padding:'12px' }}>
+              <div style={{ fontSize:15, fontWeight:600, fontFamily:'monospace', color:k.color }}>{k.v}</div>
+              <div style={{ fontSize:11, color:'var(--text2)', marginTop:3 }}>{k.label}</div>
+            </div>
+          ))}
+        </div>
+        {caPaye === 0 && (
+          <div style={{ background:'var(--orange-dim)', color:'var(--orange)', borderRadius:8, padding:'10px 12px', fontSize:12, marginTop:10 }}>
+            ⚠️ Aucun CA encaissé — marquez une facture comme payée pour activer le calcul
+          </div>
+        )}
+      </div>
+
+      {/* Investissements */}
+      <div style={{ background:'var(--bg2)', border:'1px solid var(--border)', borderRadius:'var(--radius)', overflow:'hidden' }} className="anim">
+        <div style={{ padding:'14px 16px 0', fontSize:13, fontWeight:500, color:'var(--text2)', marginBottom:10 }}>💻 Investissements prévus</div>
+        {invest.length === 0
+          ? <div style={{ textAlign:'center', padding:'1.5rem', color:'var(--text3)', fontSize:13 }}>Aucun investissement</div>
+          : invest.map(item => (
+            <div key={item.id} style={{ display:'flex', alignItems:'center', gap:12, padding:'12px 16px', borderBottom:'1px solid var(--border)' }}>
+              <div style={{ width:36, height:36, borderRadius:10, background:'var(--bg3)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:16, flexShrink:0 }}>💻</div>
+              <div style={{ flex:1 }}>
+                <div style={{ fontSize:14, fontWeight:500 }}>{item.libelle}</div>
+                <div style={{ fontSize:12, color:'var(--text2)', marginTop:1 }}>
+                  Prévu : {item.date_prevue ? new Date(item.date_prevue).toLocaleDateString('fr-FR') : '—'}
+                </div>
+              </div>
+              <div style={{ textAlign:'right', display:'flex', flexDirection:'column', alignItems:'flex-end', gap:6 }}>
+                <div style={{ fontSize:14, fontWeight:600, fontFamily:'monospace' }}>{fmtEur(item.prix)}</div>
+                <button onClick={() => toggleInvest(item)} style={{
+                  background: item.realise ? 'var(--accent-dim)' : 'var(--bg3)',
+                  color: item.realise ? 'var(--accent2)' : 'var(--text3)',
+                  border:'none', borderRadius:8, padding:'3px 8px', fontSize:10, fontWeight:500, cursor:'pointer'
+                }}>{item.realise ? '✅ Réalisé' : 'En attente'}</button>
+              </div>
+            </div>
+          ))
+        }
+      </div>
+
+      {/* Paramètres */}
+      <div style={{ background:'var(--bg2)', border:'1px solid var(--border)', borderRadius:'var(--radius)', padding:'14px 16px' }} className="anim">
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:12 }}>
+          <div style={{ fontSize:13, fontWeight:500, color:'var(--text2)' }}>⚙️ Paramètres</div>
+          <button onClick={() => setEditParams(!editParams)} style={{
+            background:'var(--bg3)', border:'1px solid var(--border)', borderRadius:8,
+            padding:'5px 12px', fontSize:12, color:'var(--text2)', cursor:'pointer'
+          }}>{editParams ? 'Annuler' : 'Modifier'}</button>
+        </div>
+
+        {editParams ? (
+          <form onSubmit={saveParams} style={{ display:'flex', flexDirection:'column', gap:10 }}>
+            {[
+              { key:'taux_horaire', label:'Taux horaire (€/h)', type:'number', step:'1' },
+              { key:'ca_vise_mensuel', label:'Objectif CA mensuel (€)', type:'number', step:'50' },
+              { key:'taux_urssaf', label:'Taux URSSAF (ex: 0.22 = 22%)', type:'number', step:'0.01' },
+            ].map(f => (
+              <div key={f.key}>
+                <label style={{ fontSize:12, color:'var(--text2)', display:'block', marginBottom:4 }}>{f.label}</label>
+                <input type={f.type} step={f.step} value={tmpParams[f.key]||''} onChange={e=>setTmpParams({...tmpParams,[f.key]:e.target.value})} style={{ width:'100%', padding:'9px 12px', background:'var(--bg3)', border:'1px solid var(--border)', borderRadius:8, color:'var(--text)', fontSize:13, outline:'none', fontFamily:'inherit' }} />
+              </div>
+            ))}
+            <button type="submit" style={{ background:'var(--accent)', color:'#fff', border:'none', borderRadius:8, padding:'10px', fontSize:13, fontWeight:500, cursor:'pointer' }}>✅ Enregistrer</button>
+          </form>
+        ) : (
+          <div style={{ display:'flex', flexDirection:'column', gap:0 }}>
+            {[
+              ['Taux horaire', params.taux_horaire+' €/h'],
+              ['Objectif CA mensuel', fmtEur(params.ca_vise_mensuel)],
+              ['Taux URSSAF', (params.taux_urssaf*100).toFixed(0)+'%'],
+            ].map(([k,v]) => (
+              <div key={k} style={{ display:'flex', justifyContent:'space-between', padding:'10px 0', borderBottom:'1px solid var(--border)', fontSize:13 }}>
+                <span style={{ color:'var(--text2)' }}>{k}</span>
+                <span style={{ fontWeight:500, fontFamily:'monospace' }}>{v}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+    </div>
+  )
+}

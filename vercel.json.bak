@@ -1,0 +1,150 @@
+import React, { useEffect, useState } from 'react'
+import { supabase } from '../lib/supabase'
+
+function fmtEur(v) {
+  const n = parseFloat(v)||0
+  return n.toLocaleString('fr-FR',{style:'currency',currency:'EUR',maximumFractionDigits:0})
+}
+
+export default function Taches() {
+  const [taches, setTaches] = useState([])
+  const [clients, setClients] = useState([])
+  const [params, setParams] = useState({ taux_horaire:40 })
+  const [loading, setLoading] = useState(true)
+  const [showForm, setShowForm] = useState(false)
+  const [form, setForm] = useState({ date: new Date().toISOString().split('T')[0], duree:'', motif:'', client_id:'' })
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => { loadAll() }, [])
+
+  async function loadAll() {
+    setLoading(true)
+    const { data: { user } } = await supabase.auth.getUser()
+    const uid = user.id
+    const [tR, cR, pR] = await Promise.all([
+      supabase.from('taches').select('*, clients(societe)').eq('user_id', uid).order('date', { ascending:false }),
+      supabase.from('clients').select('id,societe').eq('user_id', uid),
+      supabase.from('parametres').select('taux_horaire').eq('user_id', uid).single()
+    ])
+    setTaches(tR.data||[])
+    setClients(cR.data||[])
+    if (pR.data) setParams(pR.data)
+    setLoading(false)
+  }
+
+  async function saveTask(e) {
+    e.preventDefault()
+    setSaving(true)
+    const { data: { user } } = await supabase.auth.getUser()
+    await supabase.from('taches').insert({
+      user_id: user.id,
+      date: form.date,
+      duree: parseFloat(form.duree),
+      motif: form.motif,
+      client_id: form.client_id || null
+    })
+    setForm({ date: new Date().toISOString().split('T')[0], duree:'', motif:'', client_id:'' })
+    setShowForm(false)
+    setSaving(false)
+    loadAll()
+  }
+
+  async function deleteTask(id) {
+    if (!window.confirm('Supprimer cette tâche ?')) return
+    await supabase.from('taches').delete().eq('id', id)
+    setTaches(t => t.filter(x => x.id !== id))
+  }
+
+  const totalH = taches.reduce((s,r) => s+(parseFloat(r.duree)||0), 0)
+  const taux = params.taux_horaire
+
+  if (loading) return <div style={{ color:'var(--text2)', textAlign:'center', padding:'3rem' }}>Chargement…</div>
+
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+
+      {/* Header */}
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+        <div>
+          <div style={{ fontSize:17, fontWeight:600 }}>⏱ Tâches</div>
+          <div style={{ fontSize:12, color:'var(--text2)', marginTop:2 }}>
+            {totalH}h · {fmtEur(totalH*taux)} · {taux}€/h
+          </div>
+        </div>
+        <button onClick={() => setShowForm(!showForm)} style={{
+          background:'var(--accent)', color:'#fff', border:'none',
+          borderRadius:10, padding:'8px 16px', fontSize:13, fontWeight:500, cursor:'pointer'
+        }}>+ Nouvelle tâche</button>
+      </div>
+
+      {/* Formulaire ajout */}
+      {showForm && (
+        <form onSubmit={saveTask} style={{
+          background:'var(--bg2)', border:'1px solid var(--border)', borderRadius:'var(--radius)', padding:'14px 16px',
+          display:'flex', flexDirection:'column', gap:10
+        }} className="anim">
+          <div style={{ fontSize:13, fontWeight:500, marginBottom:2 }}>Nouvelle tâche</div>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+            <div>
+              <label style={labelStyle}>Date</label>
+              <input type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})} required style={inputStyle} />
+            </div>
+            <div>
+              <label style={labelStyle}>Durée (heures)</label>
+              <input type="number" step="0.5" min="0.5" value={form.duree} onChange={e=>setForm({...form,duree:e.target.value})} placeholder="Ex: 2.5" required style={inputStyle} />
+            </div>
+          </div>
+          <div>
+            <label style={labelStyle}>Motif</label>
+            <input type="text" value={form.motif} onChange={e=>setForm({...form,motif:e.target.value})} placeholder="Description de la tâche" required style={inputStyle} />
+          </div>
+          <div>
+            <label style={labelStyle}>Client</label>
+            <select value={form.client_id} onChange={e=>setForm({...form,client_id:e.target.value})} style={inputStyle}>
+              <option value="">— Sélectionner —</option>
+              {clients.map(c => <option key={c.id} value={c.id}>{c.societe}</option>)}
+            </select>
+          </div>
+          <div style={{ display:'flex', gap:8 }}>
+            <button type="submit" disabled={saving} style={{ background:'var(--accent)', color:'#fff', border:'none', borderRadius:8, padding:'10px 20px', fontSize:13, fontWeight:500, cursor:'pointer', flex:1 }}>
+              {saving ? 'Enregistrement…' : '✅ Enregistrer'}
+            </button>
+            <button type="button" onClick={()=>setShowForm(false)} style={{ background:'var(--bg3)', color:'var(--text2)', border:'1px solid var(--border)', borderRadius:8, padding:'10px 16px', fontSize:13, cursor:'pointer' }}>
+              Annuler
+            </button>
+          </div>
+        </form>
+      )}
+
+      {/* Liste tâches */}
+      <div style={{ background:'var(--bg2)', border:'1px solid var(--border)', borderRadius:'var(--radius)', overflow:'hidden' }}>
+        {taches.length === 0 ? (
+          <div style={{ textAlign:'center', padding:'2rem', color:'var(--text3)' }}>Aucune tâche enregistrée</div>
+        ) : taches.map(t => (
+          <div key={t.id} style={{ display:'flex', alignItems:'center', gap:12, padding:'12px 16px', borderBottom:'1px solid var(--border)' }}>
+            <div style={{ width:36, height:36, borderRadius:10, background:'var(--bg3)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:16, flexShrink:0 }}>🗂️</div>
+            <div style={{ flex:1, minWidth:0 }}>
+              <div style={{ fontSize:14, fontWeight:500, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{t.motif}</div>
+              <div style={{ fontSize:12, color:'var(--text2)', marginTop:1 }}>
+                {new Date(t.date).toLocaleDateString('fr-FR')}
+                {t.clients && <span style={{ color:'var(--blue)', marginLeft:6 }}>{t.clients.societe}</span>}
+              </div>
+            </div>
+            <div style={{ textAlign:'right', flexShrink:0 }}>
+              <div style={{ fontSize:14, fontWeight:600, fontFamily:'monospace', color:'var(--accent2)' }}>{t.duree}h</div>
+              <div style={{ fontSize:11, color:'var(--text2)' }}>{fmtEur(t.duree*taux)}</div>
+            </div>
+            <button onClick={() => deleteTask(t.id)} style={{ background:'none', border:'none', color:'var(--text3)', cursor:'pointer', fontSize:16, padding:'4px', marginLeft:4 }}>🗑️</button>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+const labelStyle = { fontSize:12, color:'var(--text2)', display:'block', marginBottom:4 }
+const inputStyle = {
+  width:'100%', padding:'9px 12px',
+  background:'var(--bg3)', border:'1px solid var(--border)',
+  borderRadius:8, color:'var(--text)', fontSize:13, outline:'none', fontFamily:'inherit'
+}
